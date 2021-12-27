@@ -1,4 +1,5 @@
 import csv
+import json
 import sys
 import gzip
 import pickle
@@ -6,12 +7,26 @@ import base64
 import re
 from collections import defaultdict
 
-SPLIT_FILE = "splits.csv"
-DATA_FILE_PREFIX = "2020-09-10_"
+"""
+Benji notes:
+This was the script included with D2A to extract examples from the distributable.
+I modified it:
+- Use my global vars for ML data directory
+- Extract only the data that is needed for training/inference
+- Extract only label-1 and label-0-afterfix examples.
+"""
 
-PROJECTS_LIST = ["httpd", "nginx", "libtiff", "openssl", "libav"]
-D2A_V1_DATA_DIR = "/Users/sapujar/Desktop/IBM/AI4VA/data/AutoLabellerData/"
-SPLIT_DATA_OUTPUT_DIR = "/Users/sapujar/Desktop/IBM/AI4VA/data/d2av1_releaseoutput/"
+from code_gnn.globals import ml_data_dir
+
+# SPLIT_FILE = "splits.csv"
+# DATA_FILE_PREFIX = "2021-12-12_"
+DATA_FILE_PREFIX = ""
+
+PROJECTS_LIST = ["httpd", "nginx", "libtiff", "openssl", "libav", "ffmpeg"]
+# D2A_V1_DATA_DIR = "/Users/sapujar/Desktop/IBM/AI4VA/data/AutoLabellerData/"
+# SPLIT_DATA_OUTPUT_DIR = "/Users/sapujar/Desktop/IBM/AI4VA/data/d2av1_releaseoutput/"
+D2A_V1_DATA_DIR = str(ml_data_dir / 'D2A/d2a') + '/'
+SPLIT_DATA_OUTPUT_DIR = str(ml_data_dir / 'D2A/output') + '/'
 
 
 def get_datafile_path(data_dir, file_prefix, project):
@@ -82,22 +97,23 @@ def create_cbert_bug_dict_data_list(data, after_fix=0):
     func_path_bug_function_count = 0
     for bug in data:
         if after_fix == 0:
-            decoded_bug_trace = decode_and_decompress_string(bug["zipped_bug_report"])
-            decoded_bug_trace = decoded_bug_trace.split("\n")
-            if decoded_bug_trace[0].startswith("#"):
-                decoded_bug_trace = decoded_bug_trace[1:]
-            decoded_bug_trace = "\n".join(decoded_bug_trace)
+            # decoded_bug_trace = decode_and_decompress_string(bug["zipped_bug_report"])
+            # decoded_bug_trace = decoded_bug_trace.split("\n")
+            # if decoded_bug_trace[0].startswith("#"):
+            #     decoded_bug_trace = decoded_bug_trace[1:]
+            # decoded_bug_trace = "\n".join(decoded_bug_trace)
             bug_url = bug['bug_info']['url']
             bug_info_function_path = bug['bug_info']['file'] + ":" + bug['bug_info']['procedure']
             bug_line = str(bug["bug_info"]["line"])
         else:
-            decoded_bug_trace = ""
+            # decoded_bug_trace = ""
             bug_url = ""
             bug_info_function_path = ""
             bug_line = ""
 
-        example = {"id": bug["id"], "label": bug["label"], "bug_type": bug["bug_type"], "trace": decoded_bug_trace,
-                   'bug_function': "", 'bug_url': bug_url, 'after_fix': after_fix}
+        example = {"id": bug["id"], "label": bug["label"], "bug_type": bug["bug_type"],
+                   # "trace": decoded_bug_trace,
+                   'bug_function': "", 'bug_function_args': None, 'bug_url': bug_url, 'after_fix': after_fix}
 
         seen_functions = set()
         functions_list = []
@@ -116,6 +132,7 @@ def create_cbert_bug_dict_data_list(data, after_fix=0):
                     total_functions_count += 1
                     seen_functions.add(func_key)
                 if bug['adjusted_bug_loc'] and func['idx'] == bug['bug_loc_trace_index']:
+                    example['bug_function_args'] = bug["compiler_args"][func['file']]
                     example['bug_function'] = func_code
                     example['bug_url'] = bug['adjusted_bug_loc']['url']
                 elif function_path == bug_info_function_path and example['bug_function'] == "" and func_line == bug_line:
@@ -130,7 +147,7 @@ def create_cbert_bug_dict_data_list(data, after_fix=0):
                 example['bug_function'] = func_path_match_function
                 func_path_bug_function_count += 1
 
-        example['functions'] = functions_list
+        example['functions'] = json.dumps(functions_list)
 
         if not example['functions']:
             no_functions_count += 1
@@ -189,9 +206,9 @@ def get_split_dict_bug_list(split_ids_dict, bug_dict_list):
 
 
 def main():
-    splits_csv_dict_list = read_csv_into_dict_list(SPLIT_FILE)
+    # splits_csv_dict_list = read_csv_into_dict_list(SPLIT_FILE)
 
-    project_split_ids_dict = get_project_split_ids_dict(splits_csv_dict_list)
+    # project_split_ids_dict = get_project_split_ids_dict(splits_csv_dict_list)
 
     for project in PROJECTS_LIST:
         label_one_path, label_zero_after_fix_path, label_zero_path = get_datafile_path(D2A_V1_DATA_DIR,
@@ -202,25 +219,29 @@ def main():
 
         print("Creating Label 1 examples.")
         label_one_data_dict_list = create_cbert_bug_dict_data_list(label_one_data)
+        write_dict_list_to_csv(label_one_data_dict_list, SPLIT_DATA_OUTPUT_DIR + DATA_FILE_PREFIX + "splitdata_" + project + "_1.csv")
 
-        print("Reading Label 0 file: " + label_zero_path)
-        label_zero_data = read_pickle_data_file(label_zero_path)
+        # NOTE: Skipping label 0 data because it's overwhelmingly large.
+        # print("Reading Label 0 file: " + label_zero_path)
+        # label_zero_data = read_pickle_data_file(label_zero_path)
 
-        print("Creating Label 0 examples.")
-        label_zero_data_dict_list = create_cbert_bug_dict_data_list(label_zero_data)
+        # print("Creating Label 0 examples.")
+        # label_zero_data_dict_list = create_cbert_bug_dict_data_list(label_zero_data)
+        # write_dict_list_to_csv(label_zero_data_dict_list, SPLIT_DATA_OUTPUT_DIR + DATA_FILE_PREFIX + "splitdata_" + project + "_0.csv")
 
         print("Reading Label 0 After fix file: " + label_zero_after_fix_path)
         zero_after_fix_data = read_pickle_data_file(label_zero_after_fix_path)
 
         print("Creating Label 0 after fix examples.")
         label_zero_after_fix_data_dict_list = create_cbert_bug_dict_data_list(zero_after_fix_data, 1)
+        write_dict_list_to_csv(label_zero_after_fix_data_dict_list, SPLIT_DATA_OUTPUT_DIR + DATA_FILE_PREFIX + "splitdata_" + project + "_0_afterfix.csv")
 
-        full_data_dict_list = label_one_data_dict_list + label_zero_data_dict_list + label_zero_after_fix_data_dict_list
+        # full_data_dict_list = label_one_data_dict_list + label_zero_data_dict_list + label_zero_after_fix_data_dict_list
 
-        split_dict_bug_list = get_split_dict_bug_list(project_split_ids_dict[project], full_data_dict_list)
-
-        for split, bug_list in split_dict_bug_list.items():
-            write_dict_list_to_csv(bug_list, SPLIT_DATA_OUTPUT_DIR + DATA_FILE_PREFIX + "splitdata_" + project + "_" + split + ".csv")
+        # split_dict_bug_list = get_split_dict_bug_list(project_split_ids_dict[project], full_data_dict_list)
+        #
+        # for split, bug_list in split_dict_bug_list.items():
+        #     write_dict_list_to_csv(bug_list, SPLIT_DATA_OUTPUT_DIR + DATA_FILE_PREFIX + "splitdata_" + project + "_" + split + ".csv")
 
 
 if __name__ == '__main__':
